@@ -1,0 +1,148 @@
+terraform {
+  backend "remote" {
+    organization = "{{ tf_org }}"
+
+    workspaces {
+      name = "{{ tf_workspace }}"
+    }
+  }
+}
+
+variable "project_id" {
+  type        = string
+  description = "The GCP project ID to provision resources into."
+}
+
+variable "region" {
+  type        = string
+  description = "The GCP region to provision resources into."
+}
+
+variable "zone" {
+  type        = string
+  description = "The GCP zone to provision compute instances into."
+}
+
+variable "name_label" {
+  type        = string
+  description = "The name label used to identify resources created by this TF plan."
+}
+
+variable "image" {
+  type        = string
+  description = "The source image for the compute instances created by this TF plan."
+}
+
+variable "machine_type" {
+  type        = string
+  description = "The GCP machine type for the compute instances."
+}
+
+variable "instance_count" {
+  type        = number
+  description = "The number of compute instances to create."
+  default     = 1
+}
+
+variable "public_key" {
+  type        = string
+  description = "The public key to deploy for the new instance(s)."
+}
+
+provider "google" {
+  project = var.project_id
+  region  = var.region
+  zone    = var.zone
+}
+
+resource "google_compute_network" "terraform_demo_network" {
+  name                    = "${var.name_label}-network"
+  auto_create_subnetworks = true
+}
+
+resource "google_compute_firewall" "terraform_demo_allow_ssh" {
+  name    = "${var.name_label}-allow-ssh"
+  network = google_compute_network.terraform_demo_network.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = [var.name_label]
+}
+
+resource "google_compute_firewall" "terraform_demo_allow_http" {
+  name    = "${var.name_label}-allow-http"
+  network = google_compute_network.terraform_demo_network.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["80", "8080"]
+  }
+
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = [var.name_label]
+}
+
+resource "google_compute_firewall" "terraform_demo_allow_egress" {
+  name      = "${var.name_label}-allow-egress"
+  network   = google_compute_network.terraform_demo_network.name
+  direction = "EGRESS"
+
+  allow {
+    protocol = "all"
+  }
+
+  destination_ranges = ["0.0.0.0/0"]
+  target_tags        = [var.name_label]
+}
+
+resource "google_compute_instance" "terraform_demo_instance" {
+  count        = var.instance_count
+  name         = "${var.name_label}-${count.index + 1}"
+  machine_type = var.machine_type
+  zone         = var.zone
+
+  tags = [var.name_label]
+
+  labels = {
+    provisioner = "terraform"
+    manager     = "ansible"
+  }
+
+  boot_disk {
+    initialize_params {
+      image = var.image
+    }
+  }
+
+  network_interface {
+    network = google_compute_network.terraform_demo_network.name
+
+    access_config {
+      // Ephemeral public IP
+    }
+  }
+
+  metadata = {
+    ssh-keys = "ansible:${var.public_key}"
+  }
+}
+
+output "instance_ip_addr" {
+  value       = google_compute_instance.terraform_demo_instance[*].network_interface[0].access_config[0].nat_ip
+  description = "The public IP address of the instance(s)."
+}
+
+output "instance_name" {
+  value       = google_compute_instance.terraform_demo_instance[*].name
+  description = "The name of the instance(s)."
+}
+
+output "instance_labels" {
+  value       = google_compute_instance.terraform_demo_instance[*].labels
+  description = "The labels of the instance(s)."
+}
+
